@@ -1,200 +1,181 @@
+(function () {
+  "use strict";
 
-(function(){
-  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var finePointer = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  var root = document.documentElement;
+  var navLinks = Array.prototype.slice.call(document.querySelectorAll(".nav a"));
+  var sections = ["works", "certs", "contact"].map(function (id) {
+    return document.getElementById(id);
+  }).filter(Boolean);
 
-  var canvas = document.getElementById('headCanvas');
-  var ctx = canvas && canvas.getContext ? canvas.getContext('2d') : null;
-  var poster = document.querySelector('.portrait img');
-  var FRAME_W = 810, FRAME_H = 720;
-  var MAIN_FRAMES = 29, MAIN_COLS = 8, DOWN_FRAMES = 12, DOWN_COLS = 6;
-  var HEAD_FRONT = 28, HEAD_SIDE = 0;
+  function clamp(v, lo, hi) {
+    return Math.max(lo, Math.min(hi, v));
+  }
+
+  function onScroll() {
+    var y = window.scrollY || root.scrollTop;
+
+    var current = "";
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i].getBoundingClientRect().top <= 140) current = sections[i].id;
+    }
+    if (window.innerHeight + y >= root.scrollHeight - 4) current = "contact";
+    navLinks.forEach(function (a) {
+      a.classList.toggle("active", a.getAttribute("href") === "#" + current);
+    });
+  }
+
+  var ticking = false;
+  window.addEventListener("scroll", function () {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function () {
+      onScroll();
+      ticking = false;
+    });
+  }, { passive: true });
+  onScroll();
+
+  /* reveal */
+  var revealItems = document.querySelectorAll("[data-reveal]");
+  if ("IntersectionObserver" in window && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    var revealObserver = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("in");
+          revealObserver.unobserve(entry.target);
+        }
+      });
+    }, { rootMargin: "0px 0px -8% 0px", threshold: 0.08 });
+    revealItems.forEach(function (el) { revealObserver.observe(el); });
+  } else {
+    revealItems.forEach(function (el) { el.classList.add("in"); });
+  }
+
+  /* lightbox */
+  var lb = document.getElementById("lb");
+  var lbImg = document.getElementById("lbImg");
+  var lbCap = document.getElementById("lbCap");
+  function openLightbox(btn) {
+    var img = btn.querySelector("img");
+    if (!img || !lb || !lbImg) return;
+    lbImg.src = img.currentSrc || img.src;
+    lbImg.alt = img.alt || "";
+    if (lbCap) lbCap.textContent = btn.getAttribute("data-cap") || img.alt || "";
+    if (typeof lb.showModal === "function") lb.showModal();
+    else lb.setAttribute("open", "");
+  }
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-cap]");
+    if (btn && btn.tagName === "BUTTON") {
+      e.preventDefault();
+      openLightbox(btn);
+    }
+  });
+  if (lb) {
+    lb.addEventListener("click", function (e) {
+      if (e.target === lb || e.target.closest(".lb-close")) {
+        if (typeof lb.close === "function") lb.close();
+        else lb.removeAttribute("open");
+      }
+    });
+    lb.addEventListener("cancel", function () {
+      if (typeof lb.close === "function") lb.close();
+      else lb.removeAttribute("open");
+    });
+  }
+
+  /* portrait: a single frame source, head turns toward the pointer */
+  var canvas = document.querySelector(".head");
+  var portrait = document.querySelector(".portrait");
+  var dataEl = document.getElementById("sheetData");
+  if (!canvas || !portrait || !dataEl) return;
+  var ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  var sheetData;
+  try { sheetData = JSON.parse(dataEl.textContent); } catch (err) { return; }
+
+  var FRAME_W = 270, FRAME_H = 240, MAIN_COLS = 8, MAIN_COUNT = 29, DOWN_COLS = 6, DOWN_COUNT = 12;
   var headSheet = new Image();
   var downSheet = new Image();
   var headReady = false, downReady = false;
-  var headNow = HEAD_FRONT, headTarget = HEAD_FRONT;
-  var downMode = false, downAlpha = 0, downAlphaTarget = 0;
-  var downFrame = 0, downFrameTarget = 0;
-  var mirror = 0;
-  var downLayer = document.createElement('canvas');
-  downLayer.width = FRAME_W; downLayer.height = FRAME_H;
-  var dctx = downLayer.getContext('2d');
-  var mixLayer = document.createElement('canvas');
-  mixLayer.width = FRAME_W; mixLayer.height = FRAME_H;
-  var mctx = mixLayer.getContext('2d');
+  var now = 28, target = 28, mirror = 0;
+  var downAlpha = 0, downTarget = 0;
+  var running = false, lastMove = 0;
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var fine = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
 
-  function clampNum(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
-  function easeTurn(t){ t = clampNum(t, 0, 1); return t * t * (3 - 2 * t); }
-
-  function drawIndex(c, sheet, pos, cols, count, alpha, flip){
-    var i = Math.floor(pos), f = pos - i;
-    if (i > count - 1) { i = count - 1; f = 0; }
-    if (i < 0) { i = 0; f = 0; }
-    c.save();
-    if (flip) { c.translate(FRAME_W, 0); c.scale(-1, 1); }
-    c.globalAlpha = alpha;
-    c.drawImage(sheet, (i % cols) * FRAME_W, Math.floor(i / cols) * FRAME_H, FRAME_W, FRAME_H, 0, 0, FRAME_W, FRAME_H);
-    if (f > 0.03 && i + 1 < count && f < 0.97) {
-      c.globalAlpha = alpha * f;
-      c.drawImage(sheet, ((i + 1) % cols) * FRAME_W, Math.floor((i + 1) / cols) * FRAME_H, FRAME_W, FRAME_H, 0, 0, FRAME_W, FRAME_H);
-    }
-    c.restore();
+  function drawFrame(img, pos, cols, count, alpha, flip) {
+    if (!img || !img.naturalWidth) return;
+    var i = Math.round(clamp(pos, 0, count - 1));
+    ctx.save();
+    if (flip) { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, (i % cols) * FRAME_W, Math.floor(i / cols) * FRAME_H, FRAME_W, FRAME_H, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
   }
 
-  function renderHead(){
-    if (!ctx) return;
-    var a = downReady ? downAlpha : 0;
-    if (a <= 0.004) {
-      ctx.clearRect(0, 0, FRAME_W, FRAME_H);
-      if (headReady) drawIndex(ctx, headSheet, headNow, MAIN_COLS, MAIN_FRAMES, 1, mirror ? 1 : 0);
-      return;
-    }
-    mctx.clearRect(0, 0, FRAME_W, FRAME_H);
-    if (headReady) drawIndex(mctx, headSheet, headNow, MAIN_COLS, MAIN_FRAMES, 1 - a, mirror ? 1 : 0);
-    dctx.clearRect(0, 0, FRAME_W, FRAME_H);
-    drawIndex(dctx, downSheet, downFrame, DOWN_COLS, DOWN_FRAMES, 1, mirror ? 0 : 1);
-    mctx.globalAlpha = a;
-    mctx.drawImage(downLayer, 0, 0);
-    mctx.globalAlpha = 1;
-    ctx.clearRect(0, 0, FRAME_W, FRAME_H);
-    ctx.drawImage(mixLayer, 0, 0);
+  function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawFrame(headSheet, now, MAIN_COLS, MAIN_COUNT, 1, mirror);
+    if (downAlpha > 0.01) drawFrame(downSheet, DOWN_COUNT - 1, DOWN_COLS, DOWN_COUNT, downAlpha, mirror ? 0 : 1);
   }
 
-  function headAim(x, y){
-    var inDown = Math.abs(x) < 0.97 && y > (downMode ? 0.10 : 0.20);
-    if (inDown) {
-      downMode = true;
-      downAlphaTarget = clampNum((y - 0.20) / 0.24, 0, 1);
-      downFrameTarget = clampNum((y - 0.20) / 0.55, 0, 1) * (DOWN_FRAMES - 1);
+  function ease(t) {
+    t = clamp(t, 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+
+  function onMove(e) {
+    var r = portrait.getBoundingClientRect();
+    var nx = clamp((e.clientX - (r.left + r.width / 2)) / (r.width / 2), -1.4, 1.4);
+    var ny = clamp((e.clientY - (r.top + r.height / 2)) / (r.height / 2), -1.4, 1.4);
+    if (Math.abs(nx) > 0.05) mirror = nx > 0 ? 1 : 0;
+    target = 28 - ease((Math.abs(nx) - 0.05) / 0.95) * 28;
+    downTarget = (ny > 0.48 && Math.abs(nx) < 0.6) ? clamp((ny - 0.48) / 0.52, 0, 1) : 0;
+    lastMove = performance.now();
+    if (!running) { running = true; requestAnimationFrame(tick); }
+  }
+
+  function reset() {
+    target = 28;
+    downTarget = 0;
+    lastMove = performance.now();
+    if (!running) { running = true; requestAnimationFrame(tick); }
+  }
+
+  function tick(t) {
+    now += (target - now) * 0.2;
+    downAlpha += (downTarget - downAlpha) * 0.2;
+    if (Math.abs(target - now) < 0.01) now = target;
+    if (Math.abs(downTarget - downAlpha) < 0.01) downAlpha = downTarget;
+    render();
+    var idle = t - lastMove > 900;
+    if (!idle || Math.abs(target - now) > 0.01 || downAlpha > 0.001) {
+      requestAnimationFrame(tick);
     } else {
-      downMode = false;
-      downAlphaTarget = 0;
+      running = false;
     }
-    if (Math.abs(x) > 0.05) mirror = x > 0 ? 1 : 0;
-    var turn = easeTurn((Math.abs(x) - 0.05) / 0.95);
-    headTarget = HEAD_FRONT - turn * (HEAD_FRONT - HEAD_SIDE);
   }
 
-  headSheet.onload = function(){ headReady = true; if (poster) poster.style.opacity = '0'; renderHead(); };
-  downSheet.onload = function(){ downReady = true; renderHead(); };
-  if (finePointer && !reduceMotion && ctx) {
-    headSheet.src = "__HEAD__";
-    downSheet.src = "__DOWN__";
+  headSheet.onload = function () {
+    headReady = true;
+    portrait.classList.add("ready");
+    render();
+  };
+  downSheet.onload = function () {
+    downReady = true;
+    render();
+  };
+  headSheet.src = sheetData.head;
+  downSheet.src = sheetData.down;
+
+  if (fine && !reduce) {
+    window.addEventListener("pointermove", onMove, { passive: true });
+    window.addEventListener("blur", reset);
+  } else {
+    headSheet.onload = function () {
+      portrait.classList.add("ready");
+      drawFrame(headSheet, 28, MAIN_COLS, MAIN_COUNT, 1, 0);
+    };
   }
-  renderHead();
-
-  if (finePointer && !reduceMotion && ctx) {
-    var tx = 0, ty = 0, cx = 0, cy = 0, raf = null;
-    function loop(){
-      cx += (tx - cx) * 0.09;
-      cy += (ty - cy) * 0.09;
-      headNow += (headTarget - headNow) * 0.26;
-      if (Math.abs(headTarget - headNow) < 0.002) headNow = headTarget;
-      if (downMode) {
-        downAlpha += (downAlphaTarget - downAlpha) * 0.34;
-        if (Math.abs(downAlphaTarget - downAlpha) < 0.002) downAlpha = downAlphaTarget;
-      } else {
-        downAlpha += (0 - downAlpha) * 0.50;
-        if (downAlpha < 0.002) downAlpha = 0;
-      }
-      downFrame += (downFrameTarget - downFrame) * 0.22;
-      if (Math.abs(downFrameTarget - downFrame) < 0.01) downFrame = downFrameTarget;
-      renderHead();
-      var busy = Math.abs(tx - cx) > 0.0004 || Math.abs(ty - cy) > 0.0004 ||
-                 Math.abs(headTarget - headNow) > 0.002 ||
-                 (downMode ? Math.abs(downAlphaTarget - downAlpha) > 0.002 : downAlpha > 0.002);
-      raf = busy ? requestAnimationFrame(loop) : null;
-    }
-    function kick(){ if (!raf) raf = requestAnimationFrame(loop); }
-    window.addEventListener('pointermove', function(e){
-      tx = clampNum((e.clientX / Math.max(window.innerWidth, 1) - 0.5) * 2, -1, 1);
-      ty = clampNum((e.clientY / Math.max(window.innerHeight, 1) - 0.5) * 2, -1, 1);
-      headAim(tx, ty);
-      kick();
-    }, { passive: true });
-    window.addEventListener('blur', function(){
-      downMode = false; downAlphaTarget = 0; headTarget = HEAD_FRONT; kick();
-    });
-  }
-
-  var filterButtons = Array.prototype.slice.call(document.querySelectorAll('[data-filter]'));
-  var certItems = Array.prototype.slice.call(document.querySelectorAll('[data-cat]'));
-
-  function visibleCerts(){
-    return certItems.filter(function(el){ return !el.hidden; });
-  }
-
-  var lb = document.getElementById('lb');
-  var lbImg = document.getElementById('lbImg');
-  var lbCap = document.getElementById('lbCap');
-  var lbCount = document.getElementById('lbCount');
-  var lbIndex = 0;
-
-  function paintCert(i){
-    var list = visibleCerts();
-    if (!list.length) return;
-    lbIndex = (i + list.length) % list.length;
-    var el = list[lbIndex];
-    var img = el.querySelector('img');
-    lbImg.src = img.src;
-    lbImg.alt = img.alt;
-    lbCap.textContent = el.getAttribute('data-caption') || img.alt;
-    lbCount.textContent = (lbIndex + 1) + ' / ' + list.length;
-  }
-
-  function openCert(el){
-    if (el.hidden) { var allBtn = document.querySelector('[data-filter="全部"]'); if (allBtn) allBtn.click(); }
-    paintCert(visibleCerts().indexOf(el));
-    lb.classList.add('on');
-    lb.setAttribute('aria-hidden', 'false');
-    document.body.style.overflow = 'hidden';
-    document.getElementById('lbClose').focus();
-  }
-  function closeCert(){
-    lb.classList.remove('on');
-    lb.setAttribute('aria-hidden', 'true');
-    document.body.style.overflow = '';
-  }
-
-  certItems.forEach(function(el){
-    el.addEventListener('click', function(){ openCert(el); });
-  });
-
-  Array.prototype.forEach.call(document.querySelectorAll('[data-open]'), function(btn){
-    btn.addEventListener('click', function(){
-      var el = document.querySelector('[data-cert-key="' + btn.getAttribute('data-open') + '"]');
-      if (el) openCert(el);
-    });
-  });
-
-  filterButtons.forEach(function(btn){
-    btn.addEventListener('click', function(){
-      var f = btn.getAttribute('data-filter');
-      filterButtons.forEach(function(b){ b.classList.toggle('on', b === btn); });
-      certItems.forEach(function(el){
-        el.hidden = f !== '全部' && el.getAttribute('data-cat') !== f;
-      });
-    });
-  });
-
-  document.getElementById('lbClose').addEventListener('click', closeCert);
-  document.getElementById('lbPrev').addEventListener('click', function(){ paintCert(lbIndex - 1); });
-  document.getElementById('lbNext').addEventListener('click', function(){ paintCert(lbIndex + 1); });
-  document.getElementById('lb').addEventListener('click', function(e){
-    if (e.target === lb) closeCert();
-  });
-  window.addEventListener('keydown', function(e){
-    if (!lb.classList.contains('on')) return;
-    if (e.key === 'Escape') closeCert();
-    else if (e.key === 'ArrowLeft') paintCert(lbIndex - 1);
-    else if (e.key === 'ArrowRight') paintCert(lbIndex + 1);
-  });
-  var wheelLock = 0;
-  lb.addEventListener('wheel', function(e){
-    e.preventDefault();
-    var now = Date.now();
-    if (now - wheelLock < 260) return;
-    wheelLock = now;
-    paintCert(lbIndex + (e.deltaY > 0 ? 1 : -1));
-  }, { passive: false });
 })();

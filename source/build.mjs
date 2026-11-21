@@ -1,90 +1,199 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const data = JSON.parse(fs.readFileSync(path.join(here, 'data.json'), 'utf8'));
-const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
+const work = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(work, "..");
+const content = JSON.parse(fs.readFileSync(path.join(work, "content.json"), "utf8"));
+const sizes = JSON.parse(fs.readFileSync(path.join(work, "sizes.json"), "utf8"));
+const style = fs.readFileSync(path.join(work, "style.css"), "utf8");
+const script = fs.readFileSync(path.join(work, "app.js"), "utf8");
+const template = fs.readFileSync(path.join(work, "template.html"), "utf8");
 
-function dataUrl(rel) {
-  const file = path.join(here, rel);
-  const ext = path.extname(file).toLowerCase();
-  return 'data:' + (mime[ext] || 'application/octet-stream') + ';base64,' + fs.readFileSync(file).toString('base64');
+const cache = new Map();
+function webpName(file) {
+  return String(file).replace(/\.[^.]+$/, ".webp");
 }
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function asset(file) {
+  if (!file) return "";
+  const name = webpName(file);
+  if (!cache.has(name)) {
+    const buf = fs.readFileSync(path.join(work, "assets", name));
+    cache.set(name, "data:image/webp;base64," + buf.toString("base64"));
+  }
+  return cache.get(name);
 }
-function fill(html, key, value) {
-  return html.split('__' + key + '__').join(value);
+
+function esc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[ch]));
 }
 
-const projectShort = [
-  '52 道真实场景题，9 分钟给出人格报告；报告直接接到单品、穿搭与延伸阅读。',
-  '把线下打印拆成登录、选机、支付、订单四步；设备状态与流水接进同一套系统。',
-  '学生作品与企业需求双端发布，匹配引擎给出匹配度、响应速度与多个维度。',
-  '竞争力测评、规划梳理、系统课程与学员案例，服务全国 1900 多所高校学生。'
-];
-const projectMetrics = [
-  ['52 题', '9 分钟', '14 种人格'],
-  ['4 步', '全流程', '15 元 / 时'],
-  ['95% 匹配', '0.5 秒响应', '双端'],
-  ['1900+ 学生', '9 种测评', '3 端']
-];
-const projectTags = ['小程序', '小程序', '双端', '应用'];
+function zh(value) {
+  return String(value == null ? "" : value)
+    .replace(/Agent Engineer/g, "智能体工程师")
+    .replace(/\bAI\b/g, "人工智能")
+    .replace(/\b3D\b/g, "三维")
+    .replace(/ModelScope/g, "魔搭");
+}
 
-const projectsHtml = data.projects.map((p, i) => {
-  const imgs = p.shots.map(s => '<img src="' + dataUrl(s.src) + '" alt="' + esc(s.alt) + '">').join('');
-  return '<article class="project">\n' +
-    '        <div>\n' +
-    '          <p class="p-idx">0' + (i + 1) + ' · ' + projectTags[i] + '</p>\n' +
-    '          <h3 class="p-title">' + esc(p.title) + '</h3>\n' +
-    '          <p class="p-desc">' + esc(projectShort[i]) + '</p>\n' +
-    '          <p class="p-metrics">' + projectMetrics[i].map(m => '<b>' + esc(m) + '</b>').join(' · ') + '</p>\n' +
-    '        </div>\n' +
-    '        <div class="shots" aria-label="' + esc(p.title) + ' 界面">' + imgs + '</div>\n' +
-    '      </article>';
-}).join('\n');
+function dims(file) {
+  const d = sizes[webpName(file)] || [1, 1];
+  return { w: d[0], h: d[1] };
+}
 
-const catNames = ['学科竞赛', '专利软著', '表彰荣誉', '文艺体育', '实践服务', '技能证书'];
-const counts = {};
-data.certs.forEach(c => { const k = c.cat.split(' · ')[0]; counts[k] = (counts[k] || 0) + 1; });
-const filtersHtml = ['<button class="on" type="button" data-filter="全部">全部 ' + data.certs.length + '</button>']
-  .concat(catNames.map(c => '<button type="button" data-filter="' + c + '">' + c + ' ' + (counts[c] || 0) + '</button>'))
-  .join('\n          ');
+function img(file, alt, cls = "", lazy = true) {
+  const d = dims(file);
+  return `<img${cls ? ` class="${cls}"` : ""} src="${asset(file)}" width="${d.w}" height="${d.h}" alt="${esc(alt)}"${lazy ? ' loading="lazy" decoding="async"' : ""}>`;
+}
 
-const certsHtml = data.certs.map((c, i) => {
-  const cat = c.cat.split(' · ')[0];
-  const cap = c.level + ' · ' + c.title + ' · ' + c.meta;
-  return '<button class="cert" type="button" data-cat="' + cat + '" data-cert-key="' + i + '" data-caption="' + esc(cap) + '">\n' +
-    '          <span class="cert-img"><img src="' + dataUrl(c.src) + '" alt="' + esc(c.alt) + '"></span>\n' +
-    '          <b>' + esc(c.level) + '</b><span>' + esc(c.title) + '</span>\n' +
-    '        </button>';
-}).join('\n        ');
+const typeMap = {
+  "第二文化": "小程序 · 测评",
+  "校园三维自助打印": "小程序 · 设备与订单",
+  "青铜创市": "双端 · 智能匹配",
+  "奋马职前": "应用 · 成长服务"
+};
+const verbMap = ["看", "拆", "接", "交"];
 
-const patents = data.certs.map((c, i) => ({ c, i })).filter(x => x.c.cat.startsWith('专利软著'));
-const patentsHtml = patents.map(({ c, i }) =>
-  '<button class="patent" type="button" data-open="' + i + '">\n' +
-  '          <b>' + esc(c.level) + '</b><small>' + esc(c.title) + ' · ' + esc(c.meta) + '</small><em>证书 ↗</em>\n' +
-  '        </button>'
-).join('\n        ');
+function renderWork(item, index) {
+  const type = String(item.no).split(" · ").slice(1).join(" · ");
+  const kicker = `${verbMap[index]} · ${typeMap[item.title] || type}`;
+  const titleHtml = item.title.length > 6
+    ? `${esc(item.title.slice(0, 4))}<br>${esc(item.title.slice(4))}`
+    : esc(item.title);
+  const stats = item.stats.map(([value, label]) => (
+    `<div><dt>${esc(value)}</dt><dd>${esc(label)}</dd></div>`
+  )).join("");
+  const flow = item.flow.map(([step], i, arr) => (
+    `<b>${esc(step)}</b>${i < arr.length - 1 ? "<i>→</i>" : ""}`
+  )).join("");
+  const shots = item.shots.map((shot) => (
+    `<button class="shot" type="button" data-cap="${esc(`${item.title} · ${shot.cap}`)}" aria-label="查看截图：${esc(shot.cap)}">${img(shot.file, `${item.title}：${shot.cap}`, "", true)}<span>${esc(shot.cap)}</span></button>`
+  )).join("");
+  return `
+      <article class="work" id="work-${index + 1}" data-reveal>
+        <div class="work-top">
+          <button class="cover-btn" type="button" data-cap="${esc(`${item.title} · 项目封面`)}" aria-label="查看${esc(item.title)}项目封面">${img(item.coverFile, `${item.title}项目封面`, "cover", true)}</button>
+          <div class="work-ident">
+            <h3>${titleHtml}</h3>
+            <p class="work-kicker">${esc(kicker)}</p>
+            <dl class="stats">${stats}</dl>
+          </div>
+          <div class="work-body">
+            <p class="work-desc">${esc(item.desc)}</p>
+            <p class="flow">${flow}</p>
+          </div>
+        </div>
+        <div class="shots" aria-label="${esc(item.title)}项目截图">${shots}</div>
+      </article>`;
+}
 
-let template = fs.readFileSync(path.join(here, 'template.html'), 'utf8');
-const style = fs.readFileSync(path.join(here, 'style.css'), 'utf8');
-const app = fs.readFileSync(path.join(here, 'app.js'), 'utf8');
-const poster = dataUrl('assets/character/' + data.character.poster.file);
-const head = dataUrl('assets/character/' + data.character.headSheet.file);
-const down = dataUrl('assets/character/' + data.character.downSheet.file);
+const groups = ["学科竞赛", "专利软著", "表彰荣誉", "文艺体育", "实践服务", "技能证书"];
+function certMain(c) {
+  const cat = String(c.cat).split(" · ")[0];
+  const scope = String(c.cat).split(" · ")[1] || "";
+  const level = zh(c.level);
+  const title = zh(c.title);
+  if (cat === "表彰荣誉") {
+    return { main: level, sub: [title, scope].filter(Boolean).join(" · ") };
+  }
+  const sub = [level];
+  if (scope && scope !== level && !(scope === "全国" && level.indexOf("全国") >= 0)) sub.push(scope);
+  return { main: title, sub: sub.join(" · ") };
+}
 
-template = fill(template, 'STYLE', style);
-template = fill(template, 'SCRIPT', app.replace('__HEAD__', head).replace('__DOWN__', down));
-template = fill(template, 'POSTER', poster);
-template = fill(template, 'PROJECTS', projectsHtml);
-template = fill(template, 'PATENTS', patentsHtml);
-template = fill(template, 'FILTERS', filtersHtml);
-template = fill(template, 'CERTS', certsHtml);
+function renderCert(c) {
+  const { main, sub } = certMain(c);
+  const cap = [zh(c.title), zh(c.level), zh(c.meta)].filter(Boolean).join(" · ");
+  return `<button class="cert" type="button" data-cap="${esc(cap)}" aria-label="查看证书：${esc(cap)}">
+          <span class="cert-thumb">${img(c.file, zh(c.alt || cap), "", true)}</span>
+          <span class="cert-text"><b>${esc(main)}</b><em>${esc(sub)}</em></span>
+          <span class="cert-open" aria-hidden="true">↗</span>
+        </button>`;
+}
 
-const out = path.join(here, '..', 'index.html');
-fs.writeFileSync(out, template);
-console.log('built', out);
-console.log('bytes', Buffer.byteLength(template));
-console.log('projects', data.projects.length, 'certs', data.certs.length, 'patents', patents.length);
+const certGroups = groups.map((name) => {
+  const items = content.certs.filter((c) => String(c.cat).split(" · ")[0] === name);
+  return `<section class="cert-group">
+        <div class="group-head"><h3>${esc(name)}</h3><span>${String(items.length).padStart(2, "0")}</span></div>
+        ${items.map(renderCert).join("\n        ")}
+      </section>`;
+}).join("\n      ");
+
+const poster = content.extras.poster.file;
+const headSheet = content.extras.headSheet.file;
+const downSheet = content.extras.downSheet.file;
+const sheetJson = JSON.stringify({ head: asset(headSheet), down: asset(downSheet) }).replace(/</g, "\\u003c");
+
+const body = `
+    <section class="hero" id="top">
+      <div class="wrap hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow">二〇二六 · 长沙</p>
+          <h1>由意<br><span>成形</span></h1>
+          <p class="lede">把人工智能带进真实业务现场。<br>四个项目，四道判断。</p>
+        <p class="facts"><span><b>04</b>个项目</span><span><b>03</b>个端</span><span><b>1900+</b>服务学生</span><span><b>43</b>张证书</span></p>
+          <p class="scroll">向下 <span>↓</span></p>
+        </div>
+        <figure class="portrait" aria-label="原创动画形象，头部随光标转动">
+          ${img(poster, "原创动画形象：白西装、黑马尾的女孩", "", false)}
+          <canvas class="head" width="360" height="320" aria-hidden="true"></canvas>
+        </figure>
+      </div>
+    </section>
+
+    <section class="sec" id="works">
+      <div class="wrap">
+        <div class="sec-head" data-reveal>
+          <p class="sec-no">01</p>
+          <h2>项目</h2>
+          <p class="sec-note">看现场，拆问题，接系统，交结果。<br>四个项目，四种落地。</p>
+        </div>
+        ${content.works.map(renderWork).join("\n")}
+      </div>
+    </section>
+
+    <section class="sec" id="certs">
+      <div class="wrap">
+        <div class="sec-head" data-reveal>
+          <p class="sec-no">02</p>
+          <h2>证书</h2>
+          <p class="sec-note">四十三张，六类。<br>按原图陈列，点开看全张。</p>
+        </div>
+        <div class="cert-groups" data-reveal>
+      ${certGroups}
+        </div>
+      </div>
+    </section>
+
+    <section class="sec contact" id="contact">
+      <div class="wrap">
+        <div class="sec-head contact-head" data-reveal>
+          <p class="sec-no">03</p>
+          <h2>联系</h2>
+          <p class="sec-note">不荐书，不堆词。<br>只谈具体的现场。</p>
+        </div>
+        <p class="contact-lede" data-reveal>想聊一个具体的现场，<br>从 GitHub 找我。</p>
+        <div class="contact-links" data-reveal>
+          <a href="https://github.com/8-321" target="_blank" rel="noreferrer"><span>GitHub</span><span>github.com/8-321 ↗</span></a>
+        </div>
+        <p class="contact-meta" data-reveal>长沙 · 可远程 · 二〇二六</p>
+      </div>
+    </section>`;
+
+const html = template
+  .replace("__STYLE__", style)
+  .replace("__CONTENT__", body)
+  .replace("__SHEET_JSON__", sheetJson)
+  .replace("__SCRIPT__", script);
+
+fs.writeFileSync(path.join(root, "index.html"), html, "utf8");
+console.log(JSON.stringify({
+  out: path.join(root, "index.html"),
+  bytes: Buffer.byteLength(html),
+  mb: +(Buffer.byteLength(html) / 1024 / 1024).toFixed(2),
+  works: content.works.length,
+  certs: content.certs.length,
+  groups: groups.map((g) => [g, content.certs.filter((c) => String(c.cat).split(" · ")[0] === g).length])
+}, null, 2));
