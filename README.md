@@ -38,6 +38,9 @@ source/
 ```powershell
 cd "E:\整体的作品集\极简版"
 node source/build.mjs
+
+# 如果提示找不到 node：
+& "C:\Users\34137\tools\node-v24.19.0-win-x64\node.exe" source/build.mjs
 ```
 
 ## 验收
